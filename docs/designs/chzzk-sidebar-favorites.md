@@ -69,3 +69,677 @@ B, built in stages so something usable exists early:
 ## What I noticed about how you think
 - You asked "can my favorites be mine instead of shared through an account?" before asking how to build it. You started from who owns the data.
 - You picked "native UI + groups and drag sort" over a live-alert or sharing feature. You care about it feeling like part of the site.
+
+---
+
+# Eng Review (/plan-eng-review, 2026-10-07)
+
+Target: `docs/designs/chzzk-sidebar-favorites.md` (the plan above, unchanged). Branch: feature/favorites.
+
+## Scope record
+feature answers: none proposed (no cuts); structure: B (Smaller arrangement) per D1; accepted scope: Stage 1-3 as in the design doc above, in 7 files (`content/index.tsx`, `content/style.css`, `lib/favorites.ts` model+storage, `lib/chzzk-api.ts`, `lib/dom-anchor.ts`, `components/Favorites.tsx` section+rows, `components/StarButton.tsx`); pending remedies: none yet.
+Scope Challenge result: scope accepted as-is.
+
+## Probe evidence (read-only, no cookie, 2026-10-07)
+- `GET api.chzzk.naver.com/service/v1/channels/{id}` -> 200, fields incl. `channelName`, `channelImageUrl`, `openLive`.
+- `GET api.chzzk.naver.com/polling/v2/channels/{id}/live-status` -> 200, `status: "CLOSE"`.
+- `GET api.chzzk.naver.com/service/v1/channels/followings` -> 401 without cookie.
+- CORS: `access-control-allow-origin: https://chzzk.naver.com` (+credentials) for that origin; no ACAO header for `https://example.com`.
+
+## Decision ledger
+
+### R1: Favorites storage layout (chrome.storage.sync)
+Finding: A1, P1, confidence 8/10, design doc:22,66, reviewer: Claude (plan-eng-review)
+Plan baseline: design doc:22,66 only says "channel IDs, groups and order" and `favorites` model groups[]/items[]; layout unspecified.
+Runtime evidence: storage.sync limits 102,400 B total / 8,192 B per item / 512 items / 120 writes per min (search summary, Chromium storage.json). No storage code exists yet (`entrypoints/content.ts` is a starter stub).
+Comparison grid:
+| Choice | Current | A | B |
+|---|---|---|---|
+| R1 layout | unspecified, pending | one WXT `sync:favorites` item | one item per group + one order item |
+| R1 ceiling (estimate, ~40 B/channel) | unknown | ~150-200 channels total | ~150-200 per group, 100KB / 512 items total |
+| Write coalescing (platform limit 120/min; common, required) | unspecified | <=1 write per 500 ms | same |
+| Over-quota behavior (common, required) | unspecified | visible error, local state kept | same |
+| Versioned schema via WXT `storage.defineItem` (common) | unspecified | yes | yes |
+| Extra code | none | none | key lifecycle, orphan cleanup, partial-write handling |
+Question D2:
+D2 — 즐겨찾기 저장 구조를 어떻게 할까요? <gstack-qid:plan-eng-review-storage>
+
+Project/branch/task: chzzk-favorites / feature/favorites / 엔지니어링 리뷰, 설계 문서 22행·66행
+ELI10: 즐겨찾기는 크롬 동기화 저장소(chrome.storage.sync)에 넣습니다. 이 저장소는 항목 하나가 8,192바이트, 1분에 120번 쓰기까지로 제한됩니다. 목록 전체를 한 항목에 넣으면 단순하지만 채널이 약 150~200개(추정, 채널당 약 40바이트)를 넘으면 저장이 거부되고, 그룹마다 따로 저장하면 더 많이 담을 수 있지만 코드가 늘어납니다.
+Stakes if we pick wrong: 한 항목 구조에서 한도를 넘으면 저장이 실패합니다. 그룹별 구조는 키가 여러 개라 순서 변경 중 일부만 저장되는 상태가 생길 수 있습니다.
+Recommendation: A because 대부분의 사용자는 즐겨찾기가 수십 개 수준이고, WXT storage.defineItem(version, migrations)으로 나중에 B로 이전할 수 있어서 지금은 가장 단순한 구조가 맞습니다.
+Completeness: A=8/10, B=9/10
+공통(두 옵션 모두 동일하게 포함): 쓰기는 500ms 안에 합쳐서 1회, 한도 초과 시 UI에 오류 표시하고 로컬 상태 유지, 버전 있는 스키마.
+Pros / cons:
+A) 단일 항목 (recommended)
+  ✅ 코드가 favorites.ts 하나에 모이고 읽기·쓰기가 한 번이라 순서 변경 중 부분 저장이 생기지 않습니다. (human: ~2h / CC: ~10min)
+  ❌ 채널이 약 150~200개를 넘으면 오류가 나고 그때 B로 이전하는 작업이 필요합니다.
+B) 그룹별 항목 + 순서 항목
+  ✅ 총 100KB까지, 그룹당 약 150~200개로 훨씬 많이 담을 수 있습니다. (human: ~1day / CC: ~30min)
+  ❌ 키 정리와 부분 저장 처리 코드가 늘고, 대부분의 사용자는 한도에 닿지 않아 쓰지 않을 복잡도입니다.
+Net: 단순함과 한도 150~200개(A) vs 큰 목록 대응과 코드 증가(B).
+Header: 저장 구조
+Options:
+A) 단일 항목 (recommended)
+`sync:favorites` 한 항목에 groups와 items를 모두 저장. 쓰기 500ms 합치기, 한도 초과 시 오류 표시, 버전 스키마 공통. 한도 약 150~200채널(추정).
+B) 그룹별 항목 + 순서 항목
+그룹마다 `sync:fav-group-<id>` 항목과 `sync:fav-order` 항목으로 분리 저장. 쓰기 500ms 합치기, 한도 초과 시 오류 표시, 버전 스키마 공통. 그룹당 약 150~200채널, 총 100KB/512항목.
+
+State: approved
+Actual answer: A) 단일 항목 (recommended) (D2 answer)
+Accepted scope: one WXT `storage.defineItem('sync:favorites')` item holding groups + items, versioned schema with migrations; writes coalesced to at most 1 per 500 ms; over-quota or rejected write shows a visible error and keeps local state. Upgrade trigger to per-group keys: users hitting the quota error (~150-200 channels, estimate). Lives in `lib/favorites.ts`.
+History: none
+
+### R2: Style isolation and mount strategy for the injected section
+Finding: A2, P1, confidence 7/10, design doc:15,55, reviewer: Claude (plan-eng-review)
+Plan baseline: design doc:15,55 require "looks native, light and dark mode"; mount mechanism unspecified (design doc:65 says "React root mounted above the following list").
+Runtime evidence: WXT supports `createShadowRootUi` (with `cssInjectionMode: 'ui'`) and integrated (light DOM) UI (search summary, wxt.dev content-script-ui). CHZZK's class naming and theme switch mechanism are unknown (no DOM probe yet).
+Comparison grid:
+| Choice | Current | A | B |
+|---|---|---|---|
+| R2 mount | unspecified, pending | WXT `createShadowRootUi` | WXT integrated (light DOM) UI |
+| Style source | unspecified | our own CSS tokens copied from CHZZK, inside the shadow root | CHZZK's own class names and global CSS |
+| Breaks when CHZZK redeploys CSS | unknown | no (isolated) | likely if class names are build hashes (unverified) |
+| Theme (light/dark) | unspecified | token set switched by a mapping found in Stage 0 spike | inherited from site automatically |
+| Leaks styles in/out of the page | unspecified | no | possible both ways |
+Question D3:
+D3 — 주입하는 UI의 스타일을 어떻게 격리할까요? <gstack-qid:plan-eng-review-shadow>
+
+Project/branch/task: chzzk-favorites / feature/favorites / 엔지니어링 리뷰, 설계 문서 15행·55행
+ELI10: 우리 즐겨찾기 섹션은 치지직 페이지 안에 끼워 넣습니다. 우리 CSS가 치지직 화면을 망가뜨리거나 치지직 CSS가 우리 섹션을 망가뜨리지 않게 막는 방법이 Shadow DOM(격리된 상자)입니다. 대신 치지직 모양은 우리가 직접 흉내 내야 합니다. 격리하지 않으면 모양은 자연스럽지만 치지직이 배포할 때마다 깨질 수 있습니다.
+Stakes if we pick wrong: Shadow DOM을 안 쓰면 치지직이 CSS를 바꿀 때마다 섹션이 깨져 수정 배포가 계속 필요합니다. 쓰면 다크 모드를 어떻게 감지하는지 먼저 알아내야 합니다.
+Recommendation: A because 이 확장의 가장 큰 위험이 치지직 변경에 의한 깨짐이고(설계 문서 19행), 격리가 그 위험을 가장 줄입니다. 다크 모드 감지 방식은 Stage 0 DOM 조사에서 확인합니다.
+Completeness: A=8/10, B=6/10
+Pros / cons:
+A) Shadow DOM (recommended)
+  ✅ 치지직의 CSS 배포로 우리 섹션이 깨지지 않고, 우리 CSS가 페이지로 새지 않습니다. (human: ~1day / CC: ~30min)
+  ❌ 치지직의 색·글꼴을 직접 맞춰야 하고, 다크 모드 감지 방식을 Stage 0에서 조사해야 합니다.
+B) 일반 DOM(치지직 클래스 재사용)
+  ✅ 치지직 스타일을 그대로 상속해 모양과 다크 모드가 자동으로 맞습니다. (human: ~4h / CC: ~15min)
+  ❌ 클래스 이름이 빌드마다 바뀌면 배포 때마다 깨질 수 있고(미확인), 스타일이 양방향으로 샐 수 있습니다.
+Net: 안정성(A) vs 자동으로 맞는 모양(B).
+Header: 스타일 격리
+Options:
+A) Shadow DOM (recommended)
+WXT `createShadowRootUi` + `cssInjectionMode: 'ui'`. 우리 CSS 토큰을 shadow root 안에 두고 라이트/다크 매핑은 Stage 0 조사 결과로 확정. 치지직 CSS 배포에 영향받지 않음.
+B) 일반 DOM(치지직 클래스 재사용)
+WXT integrated UI로 라이트 DOM에 마운트하고 치지직 클래스와 전역 CSS를 상속. 테마는 자동 상속, 클래스 이름이 바뀌면 깨질 수 있음.
+
+State: approved
+Actual answer: A) Shadow DOM (recommended) (D3 answer)
+Accepted scope: mount with WXT `createShadowRootUi` and `cssInjectionMode: 'ui'`; own CSS tokens inside the shadow root; light/dark token mapping to be fixed by the Stage 0 DOM spike. Affects `entrypoints/content/index.tsx`, `entrypoints/content/style.css`.
+History: none
+
+### R3: Live-status behavior when the unofficial API fails
+Finding: A5, P2, confidence 8/10, design doc:41 ("live dot"), reviewer: Claude (plan-eng-review)
+Plan baseline: design doc:41 says Stage 1 has a "live dot"; failure behavior unspecified.
+Runtime evidence: probes returned 200 for the two public endpoints and 401 for the followings endpoint without cookie; both public endpoints are undocumented (SC1) and can change shape or rate-limit. No fetch code exists yet.
+Comparison grid:
+| Choice | Current | A | B |
+|---|---|---|---|
+| R3 states shown | unspecified, pending | live / offline / unknown | live / offline |
+| On failed or malformed response | unspecified | row shows "unknown" marker, retried next poll | row shows offline |
+| Response shape check (`typeof openLive === 'boolean'`) | unspecified | yes (required to detect malformed) | no |
+| Silent wrong answer when API changes | unknown | no | yes, every favorite looks offline |
+Question D4:
+D4 — 라이브 상태를 못 가져왔을 때 어떻게 보여줄까요? <gstack-qid:plan-eng-review-unknown>
+
+Project/branch/task: chzzk-favorites / feature/favorites / 엔지니어링 리뷰, 설계 문서 41행
+ELI10: 즐겨찾기 옆의 라이브 점은 치지직의 비공식 API 응답으로 정합니다. 이 API는 예고 없이 바뀌거나 요청이 막힐 수 있습니다. 실패했을 때 "방송 안 함"으로 보여주면 틀린 정보를 조용히 보여주게 되고, "알 수 없음"을 따로 두면 더 정확하지만 상태가 하나 늘어납니다.
+Stakes if we pick wrong: 실패를 오프라인으로 처리하면 API가 바뀐 날 모든 즐겨찾기가 방송 중에도 꺼진 것처럼 보이는데 사용자도 개발자도 알아채기 어렵습니다.
+Recommendation: A because 조용히 틀린 값을 보여주는 것이 가장 나쁜 실패이고, 비용은 상태 하나와 응답 형태 검사 몇 줄입니다.
+Completeness: A=9/10, B=5/10
+Pros / cons:
+A) 세 가지 상태 (recommended)
+  ✅ API가 바뀌거나 실패해도 틀린 오프라인 표시 대신 알 수 없음으로 보여 문제를 바로 알아챌 수 있습니다. (human: ~2h / CC: ~10min)
+  ❌ 상태가 하나 늘어 점 모양과 접근성 라벨을 하나 더 디자인하고 테스트해야 합니다.
+B) 두 가지 상태
+  ✅ 코드가 가장 단순하고 점 모양도 두 가지로 끝납니다. (human: ~30min / CC: ~5min)
+  ❌ 실패나 형태 변경이 조용히 오프라인으로 보여 깨진 상태를 오래 모를 수 있습니다.
+Net: 정확한 실패 표시(A) vs 가장 단순한 표시(B).
+Header: 실패 표시
+Options:
+A) 세 가지 상태 (recommended)
+live / offline / unknown 세 상태. 응답 형태(`openLive`가 boolean인지)를 검사하고, 실패하거나 형태가 틀리면 unknown 표시 후 다음 폴링에서 재시도.
+B) 두 가지 상태
+live / offline 두 상태. 실패하거나 형태가 틀리면 offline으로 표시.
+
+State: approved
+Actual answer: A) 세 가지 상태 (recommended) (D4 answer)
+Accepted scope: rows show live / offline / unknown; response shape is validated (`typeof openLive === 'boolean'`); a failed or malformed response shows unknown and is retried on the next poll; unknown needs its own dot style and accessible label. Affects `lib/chzzk-api.ts`, `components/Favorites.tsx`.
+History: none
+
+### R4: Drag-and-drop mechanism for Stage 2 reorder
+Finding: Q3, P2, confidence 8/10, design doc:37,67 ("dnd-kit"), reviewer: Claude (plan-eng-review)
+Plan baseline: design doc:37 names "groups + dnd-kit"; design doc:67 "Stage 2 groups + dnd-kit". The earlier D6 option text said "need-based dnd-kit" (필요하면 dnd-kit), so the library is optional, not approved as a hard requirement.
+Runtime evidence (npm registry + docs, 2026-10-07): react-dnd 16.0.1 published 2022-04, peer react>=16.14, wraps HTML5 drag via HTML5Backend, touch needs a separate backend, no keyboard support. @dnd-kit/core 6.3.1 and @dnd-kit/sortable 10.0.0 published 2024-12, peer react>=16.8, keyboard + touch + screen reader announcements built in; successor @dnd-kit/react is 0.5.x beta (2026-09). Shadow root behavior of dnd-kit and react-dnd is unverified. Native HTML5 drag events are expected to cross shadow roots (verify in a Stage 2 spike). Atlassian `@atlaskit/pragmatic-drag-and-drop` 4.0.0 (2026-09) is built on native drag events and is the upgrade path from native; its shadow root behavior is also unverified.
+Comparison grid:
+| Choice | Current | A | B | C |
+|---|---|---|---|---|
+| R4 mechanism | unspecified, pending | `@dnd-kit/core` + `@dnd-kit/sortable` | native HTML5 drag and drop | `react-dnd` + `react-dnd-html5-backend` |
+| Last stable release | n/a | 2024-12 (successor is 0.x beta) | n/a | 2022-04 |
+| New dependencies | none | 2 packages | none | 2 packages |
+| Keyboard reorder | unspecified | built in | not included | not included |
+| Touch drag | unspecified | built in | not included | needs extra backend, not included |
+| Shadow root | unknown | unverified | expected, spike in Stage 2 | unverified |
+| Pure `reorder()` function, unit-tested (common, required) | n/a | yes | yes | yes |
+Question D6:
+D6 — Stage 2의 드래그 정렬을 어떤 방식으로 만들까요? <gstack-qid:plan-eng-review-dnd>
+
+Project/branch/task: chzzk-favorites / feature/favorites / 엔지니어링 리뷰, 설계 문서 37행·67행
+ELI10: 2단계에서 즐겨찾기를 끌어서 순서를 바꾸고 그룹 사이로 옮깁니다. 후보는 세 가지입니다. dnd-kit은 키보드와 터치까지 지원하지만 안정판이 2024년 12월 이후 갱신되지 않았고 후속은 0.x 베타입니다. react-dnd는 2022년 이후 릴리스가 없고 내부적으로 브라우저 기본 끌어놓기를 감싼 것일 뿐입니다. 브라우저 기본은 의존성이 없고 키보드·터치는 없습니다. 모든 옵션에서 순서 계산은 순수 함수 하나로 따로 만들어 테스트합니다.
+Stakes if we pick wrong: 라이브러리가 Shadow DOM 안에서 위치 계산을 잘못하면 드래그가 어긋나 되돌리는 데 시간이 듭니다(dnd-kit과 react-dnd 모두 미확인). 브라우저 기본을 고르면 키보드·터치로 순서를 바꿀 수 없습니다.
+Recommendation: B because 이 목록은 짧고 데스크톱 마우스 중심이며, 순서 계산이 순수 함수라 테스트가 라이브러리와 무관하고, 후보 라이브러리 모두 Shadow DOM 동작이 미확인입니다. 터치·키보드가 필요해지면 브라우저 기본 위에서 만들어진 pragmatic-drag-and-drop 등으로 점진적으로 옮길 수 있습니다.
+Completeness: A=8/10, B=7/10, C=5/10
+Pros / cons:
+A) dnd-kit
+  ✅ 키보드와 터치 드래그, 스크린리더 안내가 기본으로 들어 있어 접근성 작업이 가장 적습니다. (human: ~1day / CC: ~30min)
+  ❌ 안정판이 22개월 갱신되지 않았고 후속은 베타이며, Shadow DOM 안에서 동작하는지 확인되지 않았습니다.
+B) 브라우저 기본 끌어놓기 (recommended)
+  ✅ 의존성이 없어 확장 번들이 가장 작고, 유지할 외부 코드가 없습니다. (human: ~1day / CC: ~30min)
+  ❌ 키보드와 터치로 순서를 바꿀 수 없고, 필요해지면 나중에 바꿔야 합니다.
+C) react-dnd
+  ✅ 문서와 예제가 많고 React 훅 API가 익숙한 개발자에게 편합니다. (human: ~1day / CC: ~40min)
+  ❌ 2022년 이후 릴리스가 없고, 키보드·터치가 없으며 의존성만 늘어 이 프로젝트에서 얻는 이점이 없습니다.
+Net: 접근성 내장(A) vs 의존성 없는 단순함(B) vs 오래된 추상화(C).
+Header: 드래그 방식
+Options:
+A) dnd-kit
+`@dnd-kit/core`와 `@dnd-kit/sortable` 추가. 키보드·터치 드래그 기본 제공. 순서 계산은 순수 `reorder()` 함수로 분리해 테스트. Shadow DOM 동작은 미확인.
+B) 브라우저 기본 끌어놓기 (recommended)
+의존성 없이 HTML5 drag and drop 사용. 순서 계산은 순수 `reorder()` 함수로 분리해 테스트. 키보드·터치 정렬은 포함하지 않음. Shadow DOM 동작은 Stage 2 조사에서 확인.
+C) react-dnd
+`react-dnd`와 `react-dnd-html5-backend` 추가. 순서 계산은 순수 `reorder()` 함수로 분리해 테스트. 키보드·터치 정렬은 포함하지 않음. Shadow DOM 동작은 미확인.
+
+State: approved
+Actual answer: A) dnd-kit (D6 answer, user overrode the B recommendation)
+Accepted scope: Stage 2 uses `@dnd-kit/core` + `@dnd-kit/sortable` (stable 6.3.1 / 10.0.0) for keyboard, touch and pointer reorder, with ordering computed by a pure, unit-tested `reorder()` function. dnd-kit behavior inside the shadow root is unverified: Stage 2 begins with a spike that proves drag, drop and keyboard sensors work in a shadow root; if the spike fails, the fallback is native HTML5 drag and drop (previous option B) and this choice reopens. Affects `package.json`, `components/Favorites.tsx`, `lib/favorites.ts`.
+History: D5 (2-option brief: dnd-kit vs native) was sent but not answered; the user asked for a comparison including react-dnd first. Replaced by this 3-option D6 payload.
+
+### R5: Test framework and test depth
+Finding: T1, P1, confidence 9/10, `package.json:7-15` (scripts have dev/build/zip/compile, no test script) and design doc:60 (CI runs compile and build only), reviewer: Claude (plan-eng-review)
+Plan baseline: design doc:60 CI runs `npm run compile` and `wxt build`; no test framework or tests are specified. Regression contract: none of this repo's existing behavior is at risk (greenfield); the only pre-existing behavior at risk is the CHZZK page itself, protected by "dom-anchor never throws and no-ops when the sidebar is not found".
+Runtime evidence: 0 test files (`git ls-files`), no vitest/jest config. WXT documents `WxtVitest()` plugin from `wxt/testing/vitest-plugin` and `fakeBrowser` from `wxt/testing/fake-browser`, in-memory `storage` works without mocks (ctx7 /wxt-dev/wxt, unit-testing.md).
+Comparison grid:
+| Choice | Current | A | B | C |
+|---|---|---|---|---|
+| R5 framework | none, pending | Vitest + `WxtVitest()` + `fakeBrowser` + happy-dom | same as A | none |
+| Tests for `lib/favorites.ts`, `lib/chzzk-api.ts`, `reorder()` | none | yes | yes | no |
+| Tests for `lib/dom-anchor.ts` against saved CHZZK HTML fixtures | none | yes | yes | no |
+| Component tests (3 dot states, error banner, empty state, star toggle) | none | no (manual QA only) | yes, with `@testing-library/react` | no |
+| New dev dependencies | none | vitest, happy-dom | vitest, happy-dom, @testing-library/react (+dom) | none |
+| CI runs tests | no | `npm test` added to CI | same | no |
+Question D7:
+D7 — 테스트를 어디까지 만들까요? <gstack-qid:plan-eng-review-tests>
+
+Project/branch/task: chzzk-favorites / feature/favorites / 엔지니어링 리뷰, 테스트 리뷰, package.json 7~15행·설계 문서 60행
+ELI10: 지금은 테스트가 하나도 없고 CI도 컴파일과 빌드만 합니다. 이 확장은 치지직의 비공식 API와 화면 구조에 기대고 있어서, 치지직이 바뀌었을 때 어디가 깨졌는지 빨리 알 수 있는 테스트가 특히 중요합니다. WXT가 가짜 브라우저 저장소를 제공해서 저장 코드는 설정만 하면 바로 테스트됩니다.
+Stakes if we pick wrong: 테스트가 없으면 저장 한도 오류, 응답 형태 변경, SPA 중복 마운트 같은 버그를 사용자가 먼저 만나고, 컴포넌트 테스트를 빼면 알 수 없음 점이나 오류 배너가 조용히 사라져도 모릅니다.
+Recommendation: B because 보여줄 상태(점 세 가지, 오류 배너, 빈 상태)가 이 확장의 사용자에게 보이는 전부이고, 추가 비용은 devDependency 몇 개와 테스트 파일 두어 개입니다.
+Completeness: A=7/10, B=9/10, C=2/10
+Pros / cons:
+A) 라이브러리·앵커 테스트만
+  ✅ vitest와 happy-dom만 추가해 저장·API·정렬·DOM 앵커의 핵심 규칙을 CI에서 지킵니다. (human: ~1day / CC: ~30min)
+  ❌ 점 세 가지 상태와 오류 배너 같은 화면 동작은 수동 확인에만 의존합니다.
+B) A + 컴포넌트 테스트 (recommended)
+  ✅ 화면에 보이는 모든 상태와 별 토글까지 자동으로 확인해 치지직 변경이나 리팩터링 때 회귀를 잡습니다. (human: ~2day / CC: ~50min)
+  ❌ @testing-library/react와 관련 devDependency가 늘고 테스트 파일이 더 생깁니다.
+C) 테스트 없음
+  ✅ 설정과 의존성이 없어 지금 당장은 가장 빠릅니다. (human: 0 / CC: 0)
+  ❌ 저장 한도, 응답 형태 변경, 중복 마운트 버그를 모두 사용자가 먼저 겪고 CI가 아무것도 보호하지 못합니다.
+Net: 핵심 규칙만(A) vs 화면 상태까지(B) vs 없음(C).
+Header: 테스트 범위
+Options:
+A) 라이브러리·앵커 테스트만
+Vitest + `WxtVitest()` + `fakeBrowser` + happy-dom. `favorites.ts`, `chzzk-api.ts`, `reorder()`, `dom-anchor.ts`(저장한 HTML 픽스처)를 테스트. 컴포넌트 테스트 없음. CI에 `npm test` 추가.
+B) A + 컴포넌트 테스트 (recommended)
+A의 모든 테스트에 더해 `@testing-library/react`로 점 세 가지 상태, 오류 배너, 빈 상태, 별 토글을 테스트. CI에 `npm test` 추가.
+C) 테스트 없음
+테스트 프레임워크와 테스트 파일 없음. CI는 컴파일과 빌드만 유지. 수동 QA만.
+
+State: approved
+Actual answer: B) A + 컴포넌트 테스트 (recommended) (D7 answer)
+Accepted scope: add devDependencies `vitest`, `happy-dom`, `@testing-library/react` (+ `@testing-library/dom`), `vitest.config.ts` with `WxtVitest()`, `fakeBrowser` for storage tests, `npm test` script and a CI step. Tests: `lib/favorites.ts` (load/migrate/add/remove/dedupe/coalesced save/quota error), `lib/chzzk-api.ts` (live, offline, non-200, throw, malformed -> unknown), `reorder()`, `lib/dom-anchor.ts` against saved CHZZK HTML fixtures (found, missing, SPA remount idempotent), components (3 dot states, error banner, empty state, star toggle, StarButton hidden off channel pages). Cross-profile sync stays manual QA.
+History: none
+
+### R6: Live-status polling policy
+Finding: P1, P2, confidence 8/10, design doc:49 ("Polling interval for live status and its cost"), reviewer: Claude (plan-eng-review)
+Plan baseline: design doc:49 lists the polling interval as an open question; no value approved.
+Runtime evidence: `GET /service/v1/channels/{id}` returns `openLive` per channel, so 1 request per favorite per poll (probe, SC1). No batch endpoint was found or probed. The API's rate limits are unknown and were not probed. The plan has no count of favorites; assume 30 as an illustrative size (unknown, not measured).
+Comparison grid:
+| Choice | Current | A | B |
+|---|---|---|---|
+| R6 poll interval | unspecified, pending | 60 s | 30 s |
+| Hidden tab | unspecified | paused; one refresh when the tab becomes visible | keeps polling |
+| Concurrency cap per poll | unspecified | 4 in flight | 4 in flight (same) |
+| Requests per tab at 30 favorites (illustrative) | unknown | up to 30/min while visible, 0 hidden | 60/min always |
+| Endpoint used (common) | unspecified | `/service/v1/channels/{id}` only, 1 request per favorite per poll | same |
+Question D8:
+D8 — 라이브 상태를 얼마나 자주 확인할까요? <gstack-qid:plan-eng-review-polling>
+
+Project/branch/task: chzzk-favorites / feature/favorites / 엔지니어링 리뷰, 성능 리뷰, 설계 문서 49행
+ELI10: 즐겨찾기마다 치지직 서버에 "방송 중이야?" 하고 물어봅니다. 자주 물을수록 점이 빨리 바뀌지만 요청이 많아지고, 탭이 여러 개면 곱절이 됩니다. 이 API는 비공식이라 요청 한도를 모르고, 한도에 걸리면 내 IP가 잠시 막힐 수도 있습니다(미확인). 즐겨찾기가 30개라고 가정한 예시입니다.
+Stakes if we pick wrong: 너무 자주 묻거나 숨겨진 탭에서도 계속 물으면 요청이 낭비되고 한도에 걸릴 위험이 커집니다. 너무 드물면 방송 시작이 늦게 보입니다.
+Recommendation: A because 방송 시작을 1분 안에 보여주면 사이드바 용도로 충분하고, 숨겨진 탭을 멈추면 요청이 크게 줄며, 탭이 다시 보일 때 즉시 한 번 새로고침하면 체감 지연이 없습니다.
+Completeness: A=9/10, B=6/10
+Pros / cons:
+A) 60초 + 숨김 탭 멈춤 (recommended)
+  ✅ 요청이 가장 적어 비공식 API 한도에 걸릴 위험이 낮고, 탭이 보이면 바로 새로고침합니다. (human: ~2h / CC: ~15min)
+  ❌ 방송 시작이 최대 약 1분 늦게 보이고, 가시성 처리 코드와 그 테스트가 필요합니다.
+B) 30초 + 계속 확인
+  ✅ 방송 시작이 최대 약 30초 안에 보이고 코드가 가장 단순합니다. (human: ~1h / CC: ~10min)
+  ❌ 요청이 두 배에 숨겨진 탭에서도 계속 나가 한도 위험이 커지고 탭 수만큼 곱해집니다.
+Net: 요청 절약과 약 1분 지연(A) vs 빠른 반영과 요청 두 배(B).
+Header: 확인 주기
+Options:
+A) 60초 + 숨김 탭 멈춤 (recommended)
+`/service/v1/channels/{id}`만 사용해 즐겨찾기당 요청 1개. 60초마다 확인, 탭이 숨겨지면 멈추고 다시 보일 때 한 번 즉시 새로고침, 한 번에 최대 4개 동시 요청.
+B) 30초 + 계속 확인
+`/service/v1/channels/{id}`만 사용해 즐겨찾기당 요청 1개. 30초마다 확인, 숨겨진 탭에서도 계속 확인, 한 번에 최대 4개 동시 요청.
+
+State: approved
+Actual answer: A) 60초 + 숨김 탭 멈춤 (recommended) (D8 answer)
+Accepted scope: poll `/service/v1/channels/{id}` only (1 request per favorite per poll) every 60 s while the tab is visible, pause while hidden and refresh once when it becomes visible, at most 4 requests in flight. Affects `lib/chzzk-api.ts`, `entrypoints/content/index.tsx`; needs visibility-handling tests (R5).
+History: none
+
+### R7: TODO proposal: weekly CHZZK API shape canary
+Finding: TODO-1, P3, confidence 8/10, design doc:19 ("unofficial endpoints, which can break on a CHZZK update") and R3 (unknown state), reviewer: Claude (plan-eng-review)
+Plan baseline: no TODOS.md exists; no monitoring of API drift is planned.
+Runtime evidence: both public endpoints returned 200 without auth today (SC1); no scheduled check exists.
+Comparison grid:
+| Choice | Current | A | B | C |
+|---|---|---|---|---|
+| R7 disposition | none, pending | add to TODOS.md | skip | build now in this branch |
+| Work in this branch | none | TODOS.md entry only | none | script + GitHub Actions weekly workflow + test |
+| Drift noticed | by users reporting "unknown" dots | later, when the TODO is done | by users | within a week, by a failing Action |
+TODO details: What: a script `npm run check:chzzk` that calls the two public endpoints for one stable channel and fails if `openLive` is not boolean or fields are missing, run weekly by GitHub Actions. Why: R3 shows "unknown" to users, but the maintainer should learn of drift before users do. Pros: cheap, catches API shape drift. Cons: a public channel id can be deleted (false alarm); does not cover DOM drift (needs login). Context: Stage 1 must exist first so `lib/chzzk-api.ts` shape check can be reused. Depends on: `lib/chzzk-api.ts` and CI setup.
+Question D10:
+D10 — "치지직 API 형태 변경 감시" 작업을 TODO로 남길까요? <gstack-qid:plan-eng-review-todo-canary>
+
+Project/branch/task: chzzk-favorites / feature/favorites / 엔지니어링 리뷰 마무리, TODO 정리
+ELI10: 치지직 API가 바뀌면 사용자에게는 "알 수 없음" 점이 뜨지만, 개발자는 사용자 제보가 오기 전에는 모릅니다. 매주 GitHub Actions가 공개 API 두 개를 호출해 응답 형태가 그대로인지 확인하면 먼저 알 수 있습니다. 화면(DOM) 변경은 로그인이 필요해서 이 점검으로 알 수 없습니다.
+Stakes if we pick wrong: 건너뛰면 API 변경을 사용자 제보로 알게 되어 수정이 늦어지고, 지금 만들면 Stage 1 전에 아직 없는 API 코드에 의존하는 작업이 이 브랜치에 섞입니다.
+Recommendation: A because 이 점검은 lib/chzzk-api.ts가 생긴 뒤에 재사용하는 게 가장 쉬워 지금 만들면 순서가 어긋나고, 기록해 두면 잊지 않습니다.
+Note: options differ in kind, not coverage — no completeness score.
+Pros / cons:
+A) TODOS.md에 추가 (recommended)
+  ✅ 의존하는 API 코드가 생긴 뒤에 재사용해 만들 수 있고 작업이 기록으로 남습니다. (human: ~0 / CC: ~1min)
+  ❌ 그때까지는 API 변경을 사용자 제보로 알게 됩니다.
+B) 건너뜀
+  ✅ 관리할 항목이 늘지 않습니다. (human: 0 / CC: 0)
+  ❌ 비공식 API 변경을 사용자가 먼저 겪는 위험이 문서에 기록되지 않고 사라집니다.
+C) 지금 이 브랜치에서 만들기
+  ✅ 처음부터 주간 감시가 돌아갑니다. (human: ~4h / CC: ~20min)
+  ❌ 아직 없는 lib/chzzk-api.ts에 의존해 순서가 어긋나고 이 설계 브랜치에 CI 작업이 섞입니다.
+Net: 기록만(A) vs 안 함(B) vs 지금 구현(C).
+Header: TODO 처리
+Options:
+A) TODOS.md에 추가 (recommended)
+TODOS.md를 만들고 이 항목을 What/Why/Pros/Cons/Context/Depends와 함께 기록. 코드는 만들지 않음.
+B) 건너뜀
+기록도 구현도 하지 않음.
+C) 지금 이 브랜치에서 만들기
+`npm run check:chzzk` 스크립트, 주간 GitHub Actions 워크플로우, 테스트까지 이 브랜치의 구현 범위에 포함(이 리뷰에서는 코드를 편집하지 않음).
+
+State: approved
+Actual answer: A) TODOS.md에 추가 (recommended) (D10 answer)
+Accepted scope: create `TODOS.md` with the "Weekly CHZZK API shape canary" item (What/Why/Context/Effort S/Priority P3/Depends on). No script or workflow is built in this branch.
+History: none
+
+Approval readiness: PASS. Checked R1 (D2), R2 (D3), R3 (D4), R4 (D6, user chose A over the recommendation), R5 (D7), R6 (D8), R7 (D10). Scope record: D1. Every accepted remedy cites its own actual answer; there are no pending remedies. Outside voice (D9 approved, provider unavailable) approved no remedy.
+
+## Findings and dispositions
+**Scope Challenge:** SC1 [P3] (9/10) endpoints answered, factual correction, no remedy. SC2 [P2] (7/10) DOM unknowns, accepted as Stage 0 spike task T1. SC3 [P2] (9/10) starter `matches`, accepted mechanical task T7.
+**1. Architecture:** A1 [P1] (8/10) storage layout, accepted D2 A. A2 [P1] (7/10) style isolation, accepted D3 A. A3 [P2] (9/10) idempotent SPA mount, carried forward from the approved Success Criteria (design doc:54), task T5. A4 [P2] (8/10) untrusted API text and minimal permissions, accepted without a question (follows from the content-script fetch in SC1), task T7. A5 [P2] (8/10) failure state, accepted D4 A.
+**2. Code quality:** Q1 [P3] (9/10) package placeholders, task T7. Q2 [P3] (9/10) starter leftovers, task T7. Q3 [P2] (8/10) drag mechanism, D6: user chose dnd-kit (A), recommendation was native (B); accepted as the user's call with a Stage 2 shadow-root spike and native fallback. Shared code: none (no first-party callers yet).
+**3. Test review:** T1 [P1] (9/10) no test framework, accepted D7 B. 22 paths, 0 tested.
+**4. Performance:** P1 [P2] (8/10) polling, accepted D8 A. P2 [P3] (7/10) no memory concern. P3 [P3] (7/10) lazy images, task T9.
+**Outside voice:** Codex preflight `model_unusable` (gstack default `gpt-6-astra` unsupported on the ChatGPT-account Codex); no native replacement (TaskOutput unavailable). Coverage: unavailable. **TODOs:** TODO-1 weekly API canary, accepted D10 A.
+
+## NOT in scope
+- Live-start notifications and a background service worker: needs a background script and alarms, separate feature (design doc compares Cheese Now).
+- Firefox build: deferred by design doc:25,59, same WXT code later.
+- Importing or exporting favorites as JSON: not requested.
+- Offline followed channels from the CHZZK followings API: requires auth (401 without cookie), favorites are by channelId so it is not needed.
+- DOM drift monitoring in CI: sidebar needs a login; only the API shape canary is tracked (TODOS.md).
+- Server-side or CHZZK-account-bound storage: rejected in premise 1.
+
+## What already exists
+- WXT + React 19 starter (`wxt.config.ts`, `entrypoints/`, `tsconfig.json`): reused as the toolchain. Starter `popup/`, `background.ts`, `content.ts` placeholder and the two starter SVGs are replaced or removed (T7).
+- WXT built-ins reused instead of hand-rolling: `storage.defineItem` with `version`/`migrations`, `createShadowRootUi` with `cssInjectionMode: 'ui'`, `WxtVitest()` and `fakeBrowser`.
+- CHZZK's own public endpoints (`/service/v1/channels/{id}`) for live status; no scraping of the sidebar DOM for status.
+- Nothing to extract as shared code: no first-party callers exist yet.
+
+## Diagrams
+```
+ content script (page origin chzzk.naver.com)
+   dom-anchor.ts ──find sidebar──► createShadowRootUi (idempotent) ──► Favorites.tsx
+        ▲ MutationObserver / SPA route change              │ reads / writes
+        │                                                   ▼
+        └───────────── no sidebar: no-op             lib/favorites.ts ── 500 ms coalesced ──► sync:favorites (WXT storage, versioned)
+                                                           │ channel ids
+                                                           ▼
+                                                    lib/chzzk-api.ts  60 s, visible tab only, 4 in flight
+                                                           │
+                                                           ▼ GET /service/v1/channels/{id}
+                                          live | offline | unknown (shape check, failure -> unknown)
+```
+Name inline diagrams for: `lib/favorites.ts` (save/coalesce/quota state), `lib/chzzk-api.ts` (poll scheduler states: visible, hidden, in flight).
+
+## Failure modes
+| New path | Realistic production failure | Test | Handling | User sees |
+|---|---|---|---|---|
+| `lib/favorites.ts` save | quota exceeded (about 150-200 channels) or 120 writes/min hit | R5 planned | error state, local state kept | visible error banner |
+| `lib/chzzk-api.ts` | CHZZK changes the response shape or returns 429/5xx | R5 planned | shape check, unknown state | hollow "unknown" dot |
+| `lib/dom-anchor.ts` | CHZZK redesigns the sidebar; anchor not found | R5 planned (fixture) | no-op, no throw | section silently absent (no error shown) |
+| SPA remount | CHZZK re-renders and removes our node | R5 planned | idempotent remount | brief flicker at worst |
+| dnd-kit in shadow root | drag events mispositioned | Stage 2 spike | fall back to native HTML5 drag | reorder broken until fallback |
+Critical gaps: 0. Note for implementation: the "sidebar missing" case is silent by design; consider a one-line `console.warn` so a bug report is diagnosable.
+
+## Worktree parallelization strategy
+| Step | Modules touched | Depends on |
+|---|---|---|
+| T2 test tooling + CI | root config, `.github/` | none |
+| T1 DOM spike | `docs/` | none (needs a logged-in browser) |
+| T3, T4 libs | `lib/` | none |
+| T5 anchor + mount | `entrypoints/content/`, `lib/` | T1 |
+| T6 components | `components/` | T3, T4 |
+| T7 cleanup | root config, `entrypoints/` | none, but run first |
+| T8 Stage 2 | `components/`, `lib/` | T6 |
+
+Lane A: T2 (root config, CI). Lane B: T7 -> T3 -> T4 -> T6 -> T5 -> T8 (shared `lib/`, `components/`, `entrypoints/`, sequential). T1 can run beside either lane.
+Execution order: launch A + B; merge A before the test steps in B need to run in CI. Conflict flag: `package.json` is touched by T2, T7 and T8; sequence those edits or merge A first.
+
+## Implementation Tasks
+Synthesized from this review's findings. Each task derives from a specific finding above. Run with Claude Code or Codex; checkbox as you ship.
+
+- [ ] **T1 (P1, human: ~2h / CC: ~20min)** — stage-0 — Spike: map CHZZK sidebar DOM, theme switch and channelId URL patterns; save HTML fixtures
+  - Surfaced by: Scope Challenge SC2 and Architecture A2 (design doc:47,55)
+  - Files: docs/designs/chzzk-sidebar-favorites.md
+  - Verify: fixtures saved; doc records anchor selector, theme mechanism, URL patterns
+- [ ] **T2 (P1, human: ~1day / CC: ~30min)** — tooling — Add Vitest, WxtVitest, happy-dom, testing-library, `npm test` and a CI step
+  - Surfaced by: Test review T1 (package.json:7-15)
+  - Files: package.json, vitest.config.ts, .github/workflows/ci.yml
+  - Verify: `npm test` runs and CI is green
+- [ ] **T3 (P1, human: ~2h / CC: ~10min)** — lib/favorites — Versioned `sync:favorites` item with 500 ms coalesced writes and a quota error state
+  - Surfaced by: Architecture A1 (R1)
+  - Files: lib/favorites.ts, lib/favorites.test.ts
+  - Verify: `npm test`; dedupe, migrate, quota error tests pass
+- [ ] **T4 (P1, human: ~2h / CC: ~15min)** — lib/chzzk-api — Live client with shape check, unknown state, 60 s visible-only polling, 4 in flight
+  - Surfaced by: Architecture A5 and Performance P1 (R3, R6)
+  - Files: lib/chzzk-api.ts, lib/chzzk-api.test.ts
+  - Verify: `npm test`; malformed and failure map to unknown; hidden tab pauses
+- [ ] **T5 (P1, human: ~1day / CC: ~30min)** — lib/dom-anchor — Mount via `createShadowRootUi`, idempotent across SPA navigation, no-op when the sidebar is missing
+  - Surfaced by: Architecture A2, A3 (R2; design doc:54)
+  - Files: entrypoints/content/index.tsx, entrypoints/content/style.css, lib/dom-anchor.ts
+  - Verify: fixture tests; manual: navigate between routes, one section only
+- [ ] **T6 (P2, human: ~1day / CC: ~40min)** — components — Favorites section and StarButton with three dot states, error banner, empty state, star toggle, tests
+  - Surfaced by: Architecture A5, Test review T1
+  - Files: components/Favorites.tsx, components/StarButton.tsx
+  - Verify: `npm test`; manual star toggle on a channel page
+- [ ] **T7 (P2, human: ~30min / CC: ~5min)** — cleanup — Package name/description, manifest block (matches chzzk.naver.com, permissions storage), remove starter popup/background/SVGs
+  - Surfaced by: Code quality Q1, Q2 and SC3 (package.json:2-3, entrypoints/content.ts:2)
+  - Files: package.json, wxt.config.ts, entrypoints/content.ts, entrypoints/popup, entrypoints/background.ts
+  - Verify: `npm run compile && npm run build`
+- [ ] **T8 (P2, human: ~1day / CC: ~40min)** — stage-2 — dnd-kit spike in a shadow root, then groups and reorder with a pure `reorder()` and tests
+  - Surfaced by: Code quality Q3 (R4; design doc:37,67)
+  - Files: lib/favorites.ts, components/Favorites.tsx, package.json
+  - Verify: spike proves pointer + keyboard drag in a shadow root, else fall back to native HTML5 drag
+- [ ] **T9 (P3, human: ~30min / CC: ~5min)** — components — Lazy-load channel images at a fixed size
+  - Surfaced by: Performance P3 (design doc:41)
+  - Files: components/Favorites.tsx
+  - Verify: no layout shift when rows load
+- [ ] **T10 (P3, human: ~4h / CC: ~20min)** — infra — Weekly CHZZK API shape canary (tracked in TODOS.md)
+  - Surfaced by: TODO-1 (R7)
+  - Files: TODOS.md
+  - Verify: per TODOS.md
+
+Effort assumptions: scaffolding ~100x, tests ~50x, features ~30x ratios applied loosely; T1 depends on a logged-in browser.
+
+## Unresolved decisions
+None in this review. Open facts (not decisions, resolved by T1): CHZZK sidebar anchor, theme switch mechanism, channelId URL patterns, whether dnd-kit works in a shadow root (T8 spike).
+
+## Completion summary
+- Step 0: Scope Challenge — scope accepted as-is (structure B, smaller arrangement)
+- Architecture Review: 5 issues found
+- Code Quality Review: 3 issues found
+- Test Review: diagram produced, 22 gaps identified
+- Performance Review: 3 issues found
+- NOT in scope: written
+- What already exists: written
+- TODOS.md updates: 1 item proposed to user (accepted, written)
+- Failure modes: 0 critical gaps flagged
+- Unresolved decisions: 0 in this review
+- Outside voice: codex, unavailable (model_unusable: default model unsupported on the ChatGPT-account Codex; native fallback unavailable)
+- Parallelization: 2 lanes, 1 parallel / 1 sequential
+- Lake Score: 0/6 = answers picking a 10/10 option / answers scored for Completeness (no option scored 10/10 in any scored question; 5/6 picked the highest-scored option, D2 picked A=8 over B=9)
+
+## Suppressed findings (confidence 3-4, appendix)
+- [P3] (confidence 4/10) @dnd-kit renders an aria-live region and hidden text into `document.body`, outside the shadow root; screen reader announcements may still work, but unverified.
+- [P3] (confidence 3/10) `@dnd-kit/core` legacy attaches some listeners to `document`; pointer coordinates inside a shadow root may be retargeted. Unverified, covered by the T8 spike.
+
+# Design Review (/plan-design-review, 2026-10-07)
+
+Target: this design doc. No DESIGN.md exists, so the reference is CHZZK's own native sidebar (to be measured in Stage 0 spike T1). Visual mockups unavailable (designer needs an OpenAI API key). Reused engineering decisions (not re-asked): R2 Shadow DOM, R3 live / offline / unknown dot, R6 60 s visible-tab polling.
+
+## Design decisions
+### Pass 1 decisions (Information architecture)
+- **1A (approved, D-1A A):** the favorites section has no height cap and no inner scroll. Section and group headers collapse; collapsed state is stored in `sync:favorites` and restored next visit. Needs a `collapsed` flag on section and groups in the R1 schema.
+- **1B (approved, D-1B A):** order is fixed to the user's order. Live is shown only by the green dot and a bold channel name; no automatic re-sorting on poll.
+- Restated, not a new decision: a row shows channel avatar, channel name and the status dot, using `channelImageUrl` and `channelName` from the already probed endpoint.
+
+```
+SIDEBAR (top to bottom, one scroll column)
+ ┌────────────────────────────┐
+ │ 즐겨찾기  5            ⌄    │  section header (collapsible, count)
+ │  게임                  ⌄    │  group header (collapsible)
+ │   ◯ 한동숙           ●      │  row: avatar, name (bold when live), dot
+ │   ◯ 침착맨           ○      │
+ │  잡담                  ⌄    │
+ │   ◯ 우왁굳           ?      │  ? = unknown
+ ├────────────────────────────┤
+ │ 팔로잉 (CHZZK native)       │
+ └────────────────────────────┘
+```
+
+### Pass 2 decisions (Interaction states)
+- **2A (approved):** empty state keeps the "즐겨찾기" header and shows one line below: "채널 페이지의 ☆를 눌러 추가하세요".
+- **2B (approved):** before the first live response the dot slot stays empty (no pulse, no placeholder). Only a failed row shows the hollow "?" unknown dot (R3).
+- **2C (approved):** a storage or sync failure shows a banner directly under the section header: "저장하지 못했어요. 즐겨찾기가 다른 기기에 반영되지 않을 수 있어요." It stays until a save succeeds, then disappears on its own. Local state is kept (R1).
+
+| Feature | Loading | Empty | Error | Success | Partial |
+|---|---|---|---|---|---|
+| Favorites section | rows from storage render at once, dots empty (2B) | header + one-line hint (2A) | banner under header (2C) | rows with avatar, name, dot | failed rows show hollow "?" (R3) |
+| Live dot | empty slot | n/a | hollow "?" | green dot + bold name, or no dot (offline) | per row |
+
+### Pass 3 decisions (User journey)
+- **3A (approved):** each favorite row shows an "✕" remove button at the row end on hover and on keyboard focus; the live dot shifts left while it is visible. A click removes immediately (no confirm; removal is undoable by starring again).
+
+```
+STEP | USER DOES                     | USER FEELS        | PLAN SPECIFIES
+1    | installs, opens chzzk         | curious, "where?" | empty state hint (2A)
+2    | stars a channel               | "did it work?"    | star placement/feedback: Pass 7
+3    | sees the row appear           | relief, ownership | instant local update (R1: local state kept)
+4    | opens daily, scans for live   | habit, speed      | fixed order + dot + bold name (1B)
+5    | tidies the list               | in control        | ✕ on hover/focus (3A)
+6    | opens on another device       | trust             | sync + failure banner (2C)
+```
+5 seconds: a section that looks native. 5 minutes: add, see it, remove it. 5 years: the order stays exactly as the user set it.
+
+### Pass 4 decision (Specificity / AI slop)
+- **4A (approved):** Stage 0 (T1) measures CHZZK's row height, avatar size, font family and sizes, light and dark colors and spacing on the real page, records them as a token table in this doc and freezes them as CSS variables in `entrypoints/content/style.css`. Hard rejections: none (no cards, hero or carousel). Mode: OPERATE.
+
+### Pass 5 (Design system alignment)
+No new decision. No DESIGN.md exists; the measured token table from 4A is the reference. New components (star button, status dot, banner, ✕) are checked against CHZZK's vocabulary once T1 locates the native follow button (Pass 7).
+
+### Pass 6 platform fact
+Chrome extensions run on desktop Chrome only, so no mobile layout is designed; below the width where CHZZK hides its sidebar, the section hides with it.
+
+### Pass 6 decisions (Responsive and accessibility)
+- **6A (approved):** when CHZZK's sidebar is collapsed to its rail, the favorites section shows an avatar-only rail with the live dot on the avatar corner; group names become thin dividers; the channel name shows as a tooltip on hover. Rail width and collapse behavior are measured in T1 (4A).
+- **6B (approved):** the section is a `nav` labelled "즐겨찾기" containing a list; each row is a real link (`<a href>`, middle-click and keyboard work); the status dot has a text label ("방송 중" / "방송 안 함" / "상태 알 수 없음") in addition to color; the ✕ button has an accessible name "{channel} 즐겨찾기에서 제거"; keyboard focus shows a visible ring themed from the token table; body text contrast is at least 4.5:1 in light and dark. Drag keyboard support comes from dnd-kit sensors (R4).
+
+### Pass 7 decisions (Previously unresolved)
+- **7A (approved):** groups are managed inside the sidebar. Section header "⋯" menu: add group. Group header "⋯" menu: rename, delete (a deleted group's channels move to ungrouped). A newly starred channel lands ungrouped at the top and is moved by drag. No modal and no settings page. Stage 2.
+- **7B (approved):** the "☆" toggle sits directly beside CHZZK's native follow button on the channel page, same height and style; exact anchor and size come from T1 (4A). If CHZZK changes that area, the T1 anchor and the fixture test (R5) are the places to fix.
+
+## Design review: scores
+| Pass | Before | After | Remaining gap |
+|---|---|---|---|
+| 1 Information architecture | 4 | 8 | exact sizes come from T1 (4A) |
+| 2 Interaction states | 3 | 8 | star button on/off/hover states take their look from T1 tokens |
+| 3 User journey | 4 | 8 | none beyond T1 anchors |
+| 4 AI slop | 6 | 9 | none |
+| 5 Design system | 5 | 8 | token table not measured yet (T1) |
+| 6 Responsive and accessibility | 3 | 8 | rail width unmeasured (T1) |
+| 7 Decisions | 2 resolved, 0 deferred | | |
+Step 0 initial impression: 4/10. Overall (lowest of passes 1-6): 3/10 before, 8/10 after.
+
+## Design NOT in scope
+- Visual mockups: the designer needs an OpenAI API key (`$D setup`); not generated.
+- Mobile layout: Chrome extensions run on desktop only.
+- Live-first auto sorting (1B): rejected, order stays user-defined.
+- Section height cap with inner scroll (1A): rejected, single column scroll.
+- Toast-style errors (2C), pulsing loading dots (2B), popup-based group management (7A): rejected.
+- Notifications on live start and any popup UI beyond the starter: not designed.
+
+## Design: what already exists
+- CHZZK's native sidebar rows, follow button and collapsed rail are the visual reference; no DESIGN.md exists, and the measured token table (4A) replaces it.
+- Reused engineering decisions: R2 Shadow DOM, R3 three dot states, R6 polling cadence, R1 storage item (extended with `collapsed` flags and groups).
+
+## Design implementation tasks
+- [ ] **DT1 (P1, human: ~2h / CC: ~15min)** — stage-0 — Extend T1: measure token table (row height, avatar, fonts, light/dark colors, spacing, rail width) and locate the follow-button anchor; save as CSS variables
+  - Surfaced by: 4A, 6A, 7B
+  - Files: docs/designs/chzzk-sidebar-favorites.md, entrypoints/content/style.css
+  - Verify: table recorded; section visually matches CHZZK at 100% zoom, light and dark
+- [ ] **DT2 (P1, human: ~2h / CC: ~15min)** — lib/favorites — Add `collapsed` flags (section, groups) and group CRUD to the R1 schema with migration and tests
+  - Surfaced by: 1A, 7A
+  - Files: lib/favorites.ts, lib/favorites.test.ts
+  - Verify: `npm test`
+- [ ] **DT3 (P1, human: ~1day / CC: ~40min)** — components — Empty hint, no-dot loading, hollow "?" unknown, bold live name, error banner under header, ✕ on hover/focus, link rows, nav landmark and labels
+  - Surfaced by: 2A, 2B, 2C, 3A, 6B
+  - Files: components/Favorites.tsx, entrypoints/content/style.css
+  - Verify: `npm test` (role/label assertions); manual keyboard pass
+- [ ] **DT4 (P2, human: ~3h / CC: ~20min)** — components — Collapsed-rail variant: avatar-only, corner dot, thin group dividers, name tooltip
+  - Surfaced by: 6A
+  - Files: components/Favorites.tsx, entrypoints/content/style.css
+  - Verify: fixture test for collapsed container; manual collapse/expand
+- [ ] **DT5 (P2, human: ~1day / CC: ~40min)** — stage-2 — Section and group "⋯" menus: add, rename, delete; new channels land ungrouped on top
+  - Surfaced by: 7A
+  - Files: components/Favorites.tsx, lib/favorites.ts
+  - Verify: `npm test`; manual group create/rename/delete
+- [ ] **DT6 (P2, human: ~3h / CC: ~20min)** — components — StarButton beside the native follow button, same height and style
+  - Surfaced by: 7B
+  - Files: components/StarButton.tsx, lib/dom-anchor.ts
+  - Verify: fixture test; manual on a channel page
+Effort assumptions: features ~30x, tests ~50x human-to-CC; DT1 needs a logged-in browser.
+
+## Design: unresolved decisions
+None. Open fact, resolved by DT1: native follow-button anchor and rail width.
+
+# Eng Review re-run (/plan-eng-review, 2026-10-08)
+
+Target: this design doc including the design-review additions (`# Design Review` above). Branch: feature/favorites.
+
+## Re-run scope record
+feature answers: none proposed; structure: reuse exact prior answer D1 (B, smaller arrangement); accepted scope: unchanged from the first eng review, plus the design-review tasks DT1-DT6 which touch the same 7 files; pending remedies: R8.
+Scope Challenge result: scope accepted as-is. Prior approvals R1-R7 are reused without re-asking.
+
+## Re-run probe evidence (read-only, 2026-10-08)
+- `GET https://chzzk.naver.com/` returns a 5.8 KB shell with `<div id="root">` and a module bundle (`/static/js/index-*.js` on ssl.pstatic.net); no `__NEXT_DATA__`, no server-rendered sidebar. CHZZK is a client-rendered SPA. A plain `<a href>` click inside our shadow root is a full document navigation (browser reload), not a router navigation.
+
+## Re-run findings
+- **E1 [P3] (confidence 8/10) R1 estimate.** The design review added `collapsed` flags, `groupId` per item and group names to the `sync:favorites` item. Estimate moves from about 150-200 to about 140-180 channels (about 45-55 B per channel plus group metadata; estimate, unmeasured). Factual update to R1, no remedy.
+- **E2 [P2] (9/10) required proof for approved design behavior** (carried forward without a question): group delete moves its channels to ungrouped, new star lands ungrouped on top, collapse flags persist, remove is immediate and re-starrable. Add to the R5 `favorites.ts` tests (DT2). `dom-anchor` must also report CHZZK's collapsed-rail state to support 6A (mechanism from T1/DT1).
+- **E3 [P1] (7/10) row navigation (design doc 6B "real link"):** see R8.
+
+## Decision ledger (re-run)
+
+### R8: How a favorite row navigates to the channel
+Finding: E3, P1, confidence 7/10, design review 6B (rows are real `<a href>` links) and design doc:15 ("looks native"), reviewer: Claude (plan-eng-review)
+Plan baseline: 6B approved real links (middle-click and keyboard); how a normal click navigates was not specified.
+Runtime evidence: CHZZK is a client-rendered SPA (probe above). The site's router behavior is unverified (no DOM or router probe yet); a plain link triggers a full page load.
+Comparison grid:
+| Choice | Current | A | B |
+|---|---|---|---|
+| R8 left-click navigation | unspecified, pending | plain `<a href>`, full page load | intercept and use `history.pushState` + `popstate` so CHZZK's router handles it |
+| Middle-click, new tab, keyboard Enter (6B) | approved | works (browser default) | works (only plain left-click is intercepted) |
+| App-shell reload on click | n/a | yes (about 1-2 s, estimate) | no, if the router listens to `popstate` (unverified) |
+| Failure if CHZZK's router ignores it | n/a | none | URL changes but page does not, silent broken navigation |
+| Verification needed | none | none | T1 spike on the live site |
+Question D1:
+D1 — 즐겨찾기 행을 눌렀을 때 어떻게 이동할까요? <gstack-qid:plan-eng-review-nav>
+
+Project/branch/task: chzzk-favorites / feature/favorites / 엔지니어링 리뷰 재검토, 디자인 리뷰 6B
+ELI10: 치지직은 처음 한 번 불러온 페이지 안에서 화면만 바꾸는 방식(SPA)입니다. 우리 행이 평범한 링크면 클릭할 때 페이지 전체를 다시 불러와서 네이티브 행보다 느리고(약 1~2초, 추정) 덜 자연스럽습니다. 치지직의 라우터를 흉내 내어 화면만 바꾸는 방법은 빠르지만 치지직 내부 방식에 기대고 아직 확인되지 않았습니다.
+Stakes if we pick wrong: 라우터 흉내가 통하지 않는 날 주소만 바뀌고 화면은 그대로인 조용한 고장이 생깁니다. 평범한 링크를 고르면 모든 클릭이 전체 새로고침이라 "네이티브처럼" 목표에 약간 못 미칩니다.
+Recommendation: A because 조용한 고장이 가장 나쁜 실패이고(R3와 같은 원칙), B는 T1에서 실제 사이트로 검증한 뒤에만 안전하게 추가할 수 있습니다. 지금 A로 시작하고 T1이 통과하면 B로 올리면 됩니다.
+Completeness: A=7/10, B=8/10
+Pros / cons:
+A) 평범한 링크 (recommended)
+  ✅ 치지직 내부 방식에 의존하지 않아 깨질 일이 없고 가운데 클릭·새 탭·키보드가 브라우저 기본대로 동작합니다. (human: ~0 / CC: ~0)
+  ❌ 왼쪽 클릭마다 페이지 전체를 다시 불러와 약 1~2초(추정) 더 걸립니다.
+B) 치지직 라우터를 통한 화면 전환
+  ✅ 화면만 바뀌어 네이티브 행과 비슷하게 빠릅니다. (human: ~3h / CC: ~20min)
+  ❌ 치지직 라우터가 반응하지 않으면 주소만 바뀌는 조용한 고장이 나고 T1에서 실제 사이트로 검증해야 합니다.
+Net: 안전한 느린 이동(A) vs 빠르지만 검증이 필요한 이동(B).
+Header: 이동 방식
+Options:
+A) 평범한 링크 (recommended)
+행은 `<a href="/{channelId}">`. 왼쪽 클릭은 전체 페이지 이동. 가운데 클릭·새 탭·키보드 Enter는 브라우저 기본. T1 검증이 통과하면 B로 올리는 것은 별도 결정으로 다시 묻는다.
+B) 치지직 라우터를 통한 화면 전환
+왼쪽 클릭을 가로채 `history.pushState`와 `popstate`로 이동. 가운데 클릭·새 탭·키보드 Enter는 브라우저 기본. T1에서 실제 사이트로 검증하고 실패 시 A로 되돌린다.
+
+State: approved
+Actual answer: A) 평범한 링크 (recommended) (D1 answer, this re-run)
+Accepted scope: each favorite row is `<a href="/{channelId}">`; left-click is a full page load, middle-click, new tab and keyboard Enter use browser defaults. Ceiling: every left-click reloads the CHZZK shell (about 1-2 s, estimate). Upgrade trigger: if the T1 spike verifies that `history.pushState` + `popstate` drives CHZZK's router, reopen as a separate decision (T12). Implementation marker when coding: `gstack-shortcut(R8): full page load on left-click, upgrade when T1 verifies SPA navigation`. Affects `components/Favorites.tsx`.
+History: none
+
+Approval readiness: PASS. Re-run checked R8 (D1 answer); R1-R7 reused from the first review (answers D2-D10 there); scope reuse of D1 there. No pending remedies.
+
+## Re-run required outputs
+**NOT in scope (additions):** SPA-style navigation for favorite rows (R8 B), deferred behind T1 verification.
+**What already exists (additions):** none; the design review additions reuse the same 7 files.
+**Failure modes (addition):** left-click navigation: a plain link cannot fail silently; its cost is a full reload. Critical gaps: 0.
+**Diagram note:** row click path is `row <a href>` -> browser full navigation -> content script re-mounts via `dom-anchor` (idempotent, R5 fixture test covers remount).
+**Parallelization:** unchanged (Lane A: T2; Lane B sequential; T1 beside either).
+
+## Re-run implementation tasks
+- [ ] **T11 (P2, human: ~3h / CC: ~20min)** — lib/dom-anchor — Report CHZZK's collapsed-rail state so the favorites rail variant (6A, DT4) can switch, with fixture tests
+  - Surfaced by: E2 (design review 6A)
+  - Files: lib/dom-anchor.ts, lib/dom-anchor.test.ts
+  - Verify: `npm test`; manual collapse/expand
+- [ ] **T12 (P3, human: ~3h / CC: ~20min)** — stage-0 — During T1, test whether `history.pushState` + `popstate` drives CHZZK's router; if yes, reopen R8 as a separate decision
+  - Surfaced by: E3 (R8)
+  - Files: docs/designs/chzzk-sidebar-favorites.md
+  - Verify: result recorded in this doc
+Also extend DT2 tests with E2: group delete moves channels to ungrouped, new star lands ungrouped on top, collapse flags persist, remove is immediate.
+
+## Re-run completion summary
+- Step 0: Scope Challenge — scope accepted as-is (structure B, prior answer reused)
+- Architecture Review: 1 issue found (E3); E1 factual update
+- Code Quality Review: 0 new issues
+- Test Review: diagram unchanged, 1 requirement added to DT2 (E2); gaps unchanged
+- Performance Review: 0 new issues (E1 ceiling estimate only)
+- NOT in scope: written; What already exists: written
+- TODOS.md updates: 0 new items
+- Failure modes: 0 critical gaps flagged
+- Unresolved decisions: 0 in this review
+- Outside voice: codex, unavailable (same model_unusable as the first run; not re-probed, no replacement ran)
+- Parallelization: 2 lanes, 1 parallel / 1 sequential
+- Lake Score: 0/1 (A=7, B=8 scored; the user picked the recommended A)
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | not run | — |
+| Outside Review | codex, `/plan-eng-review` outside voice | Independent 2nd opinion | 2 | unavailable | model_unusable, no findings |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 2 | ISSUES OPEN | 3 issues (re-run; 33 in run 1), 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 1 | CLEAR | score: 3/10 → 8/10, 11 decisions |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | not run | — |
+
+- **OUTSIDE COVERAGE:** codex, phase plan-review, unavailable on both eng runs (default model `gpt-6-astra` unsupported on the ChatGPT-account Codex; second run not re-probed). No replacement reviewer completed.
+- **VERDICT:** Design Review CLEAR. Eng Review is ISSUES OPEN: 36 findings mapped to tasks T1-T12 and DT1-DT6, 0 unresolved decisions, 0 critical gaps. Eng review required: not clean because findings are mapped, not because decisions are open; implementation can start at T1.
+
+NO UNRESOLVED DECISIONS
