@@ -1,0 +1,29 @@
+/* Measured from chzzk.naver.com (desktop, 1440px). Values marked "est." are derived, not measured. */
+.fav-root {
+  --fav-font: "Pretendard Variable", Pretendard, "Apple SD Gothic NEO", "Helvetica Neue", Helvetica, 나눔고딕, NanumGothic, "Malgun Gothic", "맑은 고딕", 굴림, gulim, 새굴림, "noto sans", 돋움, Dotum, sans-serif;
+  --fav-row-h: 42px;
+  --fav-avatar: 26px;
+  --fav-font-size: 14px;
+  --fav-pad-x: 6px;
+  --fav-gap: 15px;
+  --fav-radius: 8px;
+  --fav-rail-w: 82px;
+  --fav-bg: rgb(255, 255, 255);
+  --fav-fg: rgb(32, 34, 36);
+  --fav-fg-muted: rgb(102, 106, 115); /* est. */
+  --fav-hover-bg: rgba(0, 0, 0, 0.05); /* est. */
+  --fav-accent: rgb(0, 148, 90); /* est. */
+  --fav-focus: rgb(0, 0, 0);
+  --fav-error-bg: rgb(253, 236, 236); /* est. */
+  --fav-error-fg: rgb(155, 28, 28); /* est. */
+}
+.fav-root[data-theme='dark'] {
+  --fav-bg: rgb(20, 21, 23);
+  --fav-fg: rgb(223, 226, 234);
+  --fav-fg-muted: rgb(150, 155, 165); /* est. */
+  --fav-hover-bg: rgba(255, 255, 255, 0.08); /* est. */
+  --fav-accent: rgb(0, 213, 130); /* est. */
+  --fav-focus: rgb(255, 255, 255);
+  --fav-error-bg: rgb(59, 29, 29); /* est. */
+  --fav-error-fg: rgb(255, 180, 180); /* est. */
+}
