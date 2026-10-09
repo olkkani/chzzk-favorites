@@ -1,0 +1,37 @@
+@import './tokens.css';
+
+.fav-root { font-family: var(--fav-font); font-size: var(--fav-font-size); color: var(--fav-fg); background: var(--fav-bg); }
+.fav-nav { display: block; }
+.fav-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.fav-header { display: flex; align-items: center; gap: var(--fav-gap); width: 100%; min-height: var(--fav-row-h); padding: 0 var(--fav-pad-x); border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; cursor: pointer; text-align: left; }
+.fav-count { color: var(--fav-fg-muted); font-weight: 400; }
+.fav-chevron { margin-left: auto; color: var(--fav-fg-muted); }
+.fav-header:hover, .fav-link:hover { background: var(--fav-hover-bg); }
+
+.fav-list { list-style: none; margin: 0; padding: 0; }
+.fav-row { position: relative; display: flex; align-items: center; }
+.fav-link { display: flex; align-items: center; gap: var(--fav-gap); flex: 1; min-width: 0; min-height: var(--fav-row-h); padding: 0 var(--fav-pad-x); border-radius: var(--fav-radius); color: inherit; text-decoration: none; }
+.fav-avatar { flex: none; width: var(--fav-avatar); height: var(--fav-avatar); border-radius: 50%; background: var(--fav-hover-bg); object-fit: cover; }
+.fav-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fav-name-live { font-weight: 700; }
+
+.fav-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.fav-dot-live { background: var(--fav-accent); }
+.fav-dot-unknown { box-sizing: border-box; border: 1px solid var(--fav-fg-muted); background: transparent; }
+
+.fav-remove { position: absolute; right: var(--fav-pad-x); display: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--fav-radius); background: transparent; color: var(--fav-fg-muted); cursor: pointer; }
+.fav-row:hover .fav-remove, .fav-row:focus-within .fav-remove { display: block; }
+.fav-row:hover .fav-link, .fav-row:focus-within .fav-link { padding-right: calc(var(--fav-pad-x) + 24px + var(--fav-gap)); }
+
+.fav-header:focus-visible, .fav-link:focus-visible, .fav-remove:focus-visible, .fav-star:focus-visible { outline: 2px solid var(--fav-focus); outline-offset: -2px; }
+
+.fav-banner { margin: 0; padding: 8px var(--fav-pad-x); background: var(--fav-error-bg); color: var(--fav-error-fg); }
+.fav-empty { margin: 0; padding: 8px var(--fav-pad-x); color: var(--fav-fg-muted); }
+
+.fav-rail .fav-list { width: var(--fav-rail-w); }
+.fav-rail .fav-link { justify-content: center; padding: 0; }
+.fav-rail .fav-dot { position: absolute; right: 4px; bottom: 4px; }
+
+.fav-star { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; padding: 0 8px; border: 0; border-radius: var(--fav-radius); background: transparent; color: var(--fav-fg); font: inherit; cursor: pointer; }
+.fav-star:hover { background: var(--fav-hover-bg); }
