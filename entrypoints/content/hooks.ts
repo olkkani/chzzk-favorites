@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { loadChannelCache, mergeCache, mergeStatus, pruneRecord, saveChannelCache, startPolling, type Poller } from '../../lib/chzzk-api';
 import { parseChannelId, watchRail } from '../../lib/dom-anchor';
-import { buildRows, type CachedChannel, type FavoritesState, type FavoritesStore, type LiveStatus, type RowData } from '../../lib/favorites';
+import { buildRows, filterLive, type CachedChannel, type FavoritesState, type FavoritesStore, type LiveStatus, type RowData } from '../../lib/favorites';
 
 export function useFavorites(store: FavoritesStore): FavoritesState {
   return useSyncExternalStore(store.subscribe, store.getState);
@@ -59,5 +59,5 @@ export function useRows(store: FavoritesStore): RowData[] {
     pollerRef.current?.refresh();
   }, [idsKey]);
 
-  return useMemo(() => buildRows(state.data.items, cache, status), [state.data.items, cache, status]);
+  return useMemo(() => filterLive(buildRows(state.data.items, cache, status)), [state.data.items, cache, status]);
 }

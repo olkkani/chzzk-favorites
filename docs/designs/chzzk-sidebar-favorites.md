@@ -525,7 +525,7 @@ Target: this design doc. No DESIGN.md exists, so the reference is CHZZK's own na
 ## Design decisions
 ### Pass 1 decisions (Information architecture)
 - **1A (approved, D-1A A):** the favorites section has no height cap and no inner scroll. Section and group headers collapse; collapsed state is stored in `sync:favorites` and restored next visit. Needs a `collapsed` flag on section and groups in the R1 schema.
-- **1B (approved, D-1B A):** order is fixed to the user's order. Live is shown only by the green dot and a bold channel name; no automatic re-sorting on poll.
+- **1B (approved, D-1B A):** order is fixed to the user's order. Live is shown only by the green dot and a bold channel name; no automatic re-sorting on poll. Update (2026-10-14): offline channels are hidden from the list (`filterLive`); unknown and not-yet-loaded rows stay visible. User order is still preserved among visible rows.
 - Restated, not a new decision: a row shows channel avatar, channel name and the status dot, using `channelImageUrl` and `channelName` from the already probed endpoint.
 
 ```

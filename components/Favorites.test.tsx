@@ -11,6 +11,7 @@ const row = (over: Partial<RowData> = {}): RowData => ({ channelId: A, name: '�
 const setup = (over: Partial<FavoritesProps> = {}) => {
   const props: FavoritesProps = {
     rows: [row()],
+    totalCount: 1,
     collapsed: false,
     saveFailed: false,
     rail: false,
@@ -44,9 +45,15 @@ describe('Favorites', () => {
   });
 
   it('shows the exact empty hint and no list when there are no favorites', () => {
-    setup({ rows: [] });
+    setup({ rows: [], totalCount: 0 });
     expect(screen.getByText('채널 페이지의 ☆를 눌러 추가하세요')).toBeTruthy();
     expect(screen.queryByRole('list')).toBeNull();
+  });
+
+  it('shows a no-live hint when favorites exist but none are live', () => {
+    setup({ rows: [], totalCount: 2 });
+    expect(screen.getByText('방송 중인 즐겨찾기가 없어요')).toBeTruthy();
+    expect(screen.queryByText('채널 페이지의 ☆를 눌러 추가하세요')).toBeNull();
   });
 
   it('hides rows and the hint when collapsed and toggles through the header', () => {

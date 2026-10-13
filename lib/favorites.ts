@@ -80,6 +80,8 @@ export function buildRows(
   }));
 }
 
+export const filterLive = (rows: RowData[]): RowData[] => rows.filter((r) => r.status !== 'offline');
+
 export type SaveStatus = 'ok' | 'error';
 export interface FavoritesState {
   data: FavoritesData;

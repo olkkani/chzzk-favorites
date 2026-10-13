@@ -8,11 +8,13 @@ import {
   createDefaultStore,
   createFavoritesStore,
   favoritesItem,
+  filterLive,
   isFavorite,
   normalizeFavorites,
   removeFavorite,
   toggleSectionCollapsed,
   type FavoritesData,
+  type RowData,
 } from './favorites';
 
 const ID_A = 'a'.repeat(32);
@@ -89,6 +91,14 @@ describe('buildRows', () => {
       { channelId: ID_A, name: '한동숙', imageUrl: 'https://x/y.png', status: 'live' },
       { channelId: ID_B, name: null, imageUrl: null, status: null },
     ]);
+  });
+});
+
+describe('filterLive', () => {
+  const r = (channelId: string, status: RowData['status']): RowData => ({ channelId, name: null, imageUrl: null, status });
+  it('drops offline rows and keeps live, unknown and not-yet-loaded rows in order', () => {
+    const rows = [r('1', 'offline'), r('2', 'live'), r('3', 'unknown'), r('4', null)];
+    expect(filterLive(rows).map((x) => x.channelId)).toEqual(['2', '3', '4']);
   });
 });
 

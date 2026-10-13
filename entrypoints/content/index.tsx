@@ -14,6 +14,7 @@ function FavoritesApp({ store }: { store: FavoritesStore }) {
   return (
     <Favorites
       rows={rows}
+      totalCount={state.data.items.length}
       collapsed={state.data.collapsed}
       saveFailed={state.saveStatus === 'error'}
       rail={rail}

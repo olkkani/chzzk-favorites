@@ -4,6 +4,7 @@ const LABEL = { live: '방송 중', offline: '방송 안 함', unknown: '상태 
 
 export interface FavoritesProps {
   rows: RowData[];
+  totalCount: number;
   collapsed: boolean;
   saveFailed: boolean;
   rail: boolean;
@@ -48,7 +49,7 @@ function Row({ row, rail, onRemove }: { row: RowData; rail: boolean; onRemove(id
   );
 }
 
-export function Favorites({ rows, collapsed, saveFailed, rail, onToggleCollapsed, onRemove }: FavoritesProps) {
+export function Favorites({ rows, totalCount, collapsed, saveFailed, rail, onToggleCollapsed, onRemove }: FavoritesProps) {
   const showBody = rail || !collapsed;
   return (
     <nav className={rail ? 'fav-nav fav-rail' : 'fav-nav'} aria-label="즐겨찾기">
@@ -68,7 +69,11 @@ export function Favorites({ rows, collapsed, saveFailed, rail, onToggleCollapsed
       )}
       {showBody &&
         (rows.length === 0 ? (
-          rail ? null : <p className="fav-empty">채널 페이지의 ☆를 눌러 추가하세요</p>
+          rail ? null : (
+            <p className="fav-empty">
+              {totalCount > 0 ? '방송 중인 즐겨찾기가 없어요' : '채널 페이지의 ☆를 눌러 추가하세요'}
+            </p>
+          )
         ) : (
           <ul className="fav-list">
             {rows.map((r) => (
