@@ -1,4 +1,4 @@
-import type { RowData } from '../lib/favorites';
+import { formatViewers, groupByCategory, type RowData } from '../lib/favorites';
 
 const LABEL = { live: '방송 중', offline: '방송 안 함', unknown: '상태 알 수 없음' } as const;
 
@@ -32,6 +32,9 @@ function Row({ row, rail, onRemove }: { row: RowData; rail: boolean; onRemove(id
           <span className="fav-sr">{label}</span>
         ) : (
           <span className={row.status === 'live' ? 'fav-name fav-name-live' : 'fav-name'}>{label}</span>
+        )}
+        {!rail && row.status === 'live' && row.viewers !== null && (
+          <span className="fav-viewers">{formatViewers(row.viewers)}</span>
         )}
         <StatusDot status={row.status} />
       </a>
@@ -75,11 +78,16 @@ export function Favorites({ rows, totalCount, collapsed, saveFailed, rail, onTog
             </p>
           )
         ) : (
-          <ul className="fav-list">
-            {rows.map((r) => (
-              <Row key={r.channelId} row={r} rail={rail} onRemove={onRemove} />
-            ))}
-          </ul>
+          groupByCategory(rows).map((g) => (
+            <section key={g.category ?? ''} className="fav-group">
+              {!rail && <h3 className="fav-group-title">{g.category ?? '기타'}</h3>}
+              <ul className="fav-list">
+                {g.rows.map((r) => (
+                  <Row key={r.channelId} row={r} rail={rail} onRemove={onRemove} />
+                ))}
+              </ul>
+            </section>
+          ))
         ))}
     </nav>
   );

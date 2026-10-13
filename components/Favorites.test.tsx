@@ -6,7 +6,7 @@ import type { RowData } from '../lib/favorites';
 const A = 'a'.repeat(32);
 const B = 'b'.repeat(32);
 const C = 'c'.repeat(32);
-const row = (over: Partial<RowData> = {}): RowData => ({ channelId: A, name: '한동숙', imageUrl: null, status: 'offline', ...over });
+const row = (over: Partial<RowData> = {}): RowData => ({ channelId: A, name: '한동숙', imageUrl: null, status: 'offline', category: null, viewers: null, ...over });
 
 const setup = (over: Partial<FavoritesProps> = {}) => {
   const props: FavoritesProps = {
@@ -107,5 +107,54 @@ describe('Favorites', () => {
   it('rail mode with no favorites renders no hint', () => {
     setup({ rail: true, rows: [] });
     expect(screen.queryByText('채널 페이지의 ☆를 눌러 추가하세요')).toBeNull();
+  });
+
+  it('renders a category heading per group in order, with rows under each', () => {
+    setup({
+      rows: [
+        row({ channelId: A, name: 'a', status: 'live', category: '게임A', viewers: 10 }),
+        row({ channelId: B, name: 'b', status: 'live', category: '게임B', viewers: 99 }),
+      ],
+    });
+    const nav = screen.getByRole('navigation', { name: '즐겨찾기' });
+    const heads = within(nav).getAllByRole('heading');
+    expect(heads.map((h) => h.textContent)).toEqual(['게임B', '게임A']);
+    const groups = within(nav).getAllByRole('list');
+    expect(within(groups[0]!).getByRole('link', { name: /b/ })).toBeTruthy();
+  });
+
+  it('labels rows without a category as 기타', () => {
+    setup({ rows: [row({ status: 'live', category: null })] });
+    expect(screen.getByRole('heading').textContent).toBe('기타');
+  });
+
+  it('omits headings in rail mode but keeps group order', () => {
+    setup({
+      rail: true,
+      rows: [
+        row({ channelId: A, name: 'a', status: 'live', category: '게임A', viewers: 10 }),
+        row({ channelId: B, name: 'b', status: 'live', category: '게임B', viewers: 99 }),
+      ],
+    });
+    expect(screen.queryAllByRole('heading')).toHaveLength(0);
+    expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).toEqual([`/${B}`, `/${A}`]);
+  });
+
+  it('shows the viewer count on live rows only', () => {
+    setup({
+      rows: [
+        row({ channelId: A, name: 'a', status: 'live', viewers: 12345 }),
+        row({ channelId: B, name: 'b', status: 'live', viewers: null }),
+        row({ channelId: C, name: 'c', status: 'unknown', viewers: 50 }),
+      ],
+    });
+    expect(screen.getByText('1.2만')).toBeTruthy();
+    expect(screen.queryByText('50')).toBeNull();
+    expect(document.querySelectorAll('.fav-viewers')).toHaveLength(1);
+  });
+
+  it('hides the viewer count in rail mode', () => {
+    setup({ rail: true, rows: [row({ status: 'live', viewers: 12345 })] });
+    expect(document.querySelector('.fav-viewers')).toBeNull();
   });
 });

@@ -9,12 +9,15 @@
 .fav-chevron { margin-left: auto; color: var(--fav-fg-muted); }
 .fav-header:hover, .fav-link:hover { background: var(--fav-hover-bg); }
 
+.fav-group-title { margin: 0; padding: 0 var(--fav-pad-x); min-height: var(--fav-row-h); display: flex; align-items: center; color: var(--fav-fg-muted); font: inherit; font-size: 12px; font-weight: 400; }
 .fav-list { list-style: none; margin: 0; padding: 0; }
 .fav-row { position: relative; display: flex; align-items: center; }
 .fav-link { display: flex; align-items: center; gap: var(--fav-gap); flex: 1; min-width: 0; min-height: var(--fav-row-h); padding: 0 var(--fav-pad-x); border-radius: var(--fav-radius); color: inherit; text-decoration: none; }
 .fav-avatar { flex: none; width: var(--fav-avatar); height: var(--fav-avatar); border-radius: 50%; background: var(--fav-hover-bg); object-fit: cover; }
 .fav-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fav-name-live { font-weight: 700; }
+.fav-viewers { color: var(--fav-fg-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.fav-row:hover .fav-viewers, .fav-row:focus-within .fav-viewers { display: none; }
 
 .fav-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
 .fav-dot-live { background: var(--fav-accent); }

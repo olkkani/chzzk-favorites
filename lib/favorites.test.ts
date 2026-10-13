@@ -9,6 +9,8 @@ import {
   createFavoritesStore,
   favoritesItem,
   filterLive,
+  formatViewers,
+  groupByCategory,
   isFavorite,
   normalizeFavorites,
   removeFavorite,
@@ -86,16 +88,17 @@ describe('buildRows', () => {
       [{ channelId: ID_A, groupId: null }, { channelId: ID_B, groupId: null }],
       { [ID_A]: { name: '한동숙', imageUrl: 'https://x/y.png' } },
       { [ID_A]: 'live' },
+      { [ID_A]: { category: '저스트 채팅', viewers: 120 } },
     );
     expect(rows).toEqual([
-      { channelId: ID_A, name: '한동숙', imageUrl: 'https://x/y.png', status: 'live' },
-      { channelId: ID_B, name: null, imageUrl: null, status: null },
+      { channelId: ID_A, name: '한동숙', imageUrl: 'https://x/y.png', status: 'live', category: '저스트 채팅', viewers: 120 },
+      { channelId: ID_B, name: null, imageUrl: null, status: null, category: null, viewers: null },
     ]);
   });
 });
 
 describe('filterLive', () => {
-  const r = (channelId: string, status: RowData['status']): RowData => ({ channelId, name: null, imageUrl: null, status });
+  const r = (channelId: string, status: RowData['status']): RowData => ({ channelId, name: null, imageUrl: null, status, category: null, viewers: null });
   it('drops offline rows and keeps live, unknown and not-yet-loaded rows in order', () => {
     const rows = [r('1', 'offline'), r('2', 'live'), r('3', 'unknown'), r('4', null)];
     expect(filterLive(rows).map((x) => x.channelId)).toEqual(['2', '3', '4']);
@@ -199,5 +202,53 @@ describe('default store on the fake browser', () => {
     });
     const again = await createDefaultStore();
     expect(again.getState().data.items).toEqual([{ channelId: ID_A, groupId: null }]);
+  });
+});
+
+describe('groupByCategory', () => {
+  const g = (channelId: string, category: string | null, viewers: number | null): RowData => ({
+    channelId, name: null, imageUrl: null, status: 'live', category, viewers,
+  });
+
+  it('orders groups by total viewers and rows inside a group by viewers desc', () => {
+    const groups = groupByCategory([g('a', '게임A', 100), g('b', '게임B', 500), g('c', '게임A', 450), g('d', '게임B', 10)]);
+    expect(groups.map((x) => [x.category, x.total])).toEqual([['게임A', 550], ['게임B', 510]]);
+    expect(groups[0]!.rows.map((r) => r.channelId)).toEqual(['c', 'a']);
+    expect(groups[1]!.rows.map((r) => r.channelId)).toEqual(['b', 'd']);
+  });
+
+  it('puts null viewers last in a group and counts them as 0', () => {
+    const [grp] = groupByCategory([g('a', 'X', null), g('b', 'X', 5)]);
+    expect(grp!.rows.map((r) => r.channelId)).toEqual(['b', 'a']);
+    expect(grp!.total).toBe(5);
+  });
+
+  it('keeps input order on ties', () => {
+    const groups = groupByCategory([g('a', 'X', 10), g('b', 'Y', 10), g('c', 'X', 10), g('d', 'Y', 10)]);
+    expect(groups.map((x) => x.category)).toEqual(['X', 'Y']);
+    expect(groups[0]!.rows.map((r) => r.channelId)).toEqual(['a', 'c']);
+  });
+
+  it('collects rows without a category into a trailing group with a null category', () => {
+    const groups = groupByCategory([g('a', null, 9999), g('b', 'X', 1)]);
+    expect(groups.map((x) => x.category)).toEqual(['X', null]);
+  });
+
+  it('returns no groups for no rows', () => {
+    expect(groupByCategory([])).toEqual([]);
+  });
+});
+
+describe('formatViewers', () => {
+  it('shows exact counts under 10,000 with separators', () => {
+    expect(formatViewers(0)).toBe('0');
+    expect(formatViewers(999)).toBe('999');
+    expect(formatViewers(9999)).toBe('9,999');
+  });
+
+  it('abbreviates 10,000 and above in 만, truncating to one decimal', () => {
+    expect(formatViewers(10000)).toBe('1만');
+    expect(formatViewers(12345)).toBe('1.2만');
+    expect(formatViewers(129999)).toBe('12.9만');
   });
 });

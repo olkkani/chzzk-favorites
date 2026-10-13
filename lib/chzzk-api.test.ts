@@ -17,11 +17,38 @@ const ID = 'a'.repeat(32);
 const ok = (content: unknown) =>
   vi.fn(async (_url: RequestInfo | URL) => ({ ok: true, json: async () => ({ code: 200, content }) }) as unknown as Response);
 
+const urlOf = (c: unknown[]) => String(c[0]);
+const routed = (channels: unknown, detail: unknown) =>
+  vi.fn(async (url: RequestInfo | URL) => {
+    const content = String(url).includes('/live-detail') ? detail : channels;
+    return { ok: content !== null, json: async () => ({ code: 200, content }) } as unknown as Response;
+  });
+
 describe('fetchChannel', () => {
-  it('maps openLive true to live and keeps name and https image', async () => {
-    const f = ok({ channelName: '한동숙', channelImageUrl: 'https://img/x.png', openLive: true });
-    expect(await fetchChannel(ID, f)).toEqual({ channelId: ID, name: '한동숙', imageUrl: 'https://img/x.png', status: 'live' });
-    expect(f.mock.calls[0]![0]).toBe(`https://api.chzzk.naver.com/service/v1/channels/${ID}`);
+  it('maps openLive true to live, keeps name and https image, and adds category and viewers from live-detail', async () => {
+    const f = routed(
+      { channelName: '한동숙', channelImageUrl: 'https://img/x.png', openLive: true },
+      { liveCategoryValue: '저스트 채팅', concurrentUserCount: 321 },
+    );
+    expect(await fetchChannel(ID, f)).toEqual({
+      channelId: ID, name: '한동숙', imageUrl: 'https://img/x.png', status: 'live', category: '저스트 채팅', viewers: 321,
+    });
+    expect(f.mock.calls.map(urlOf)).toEqual([
+      `https://api.chzzk.naver.com/service/v1/channels/${ID}`,
+      `https://api.chzzk.naver.com/service/v3/channels/${ID}/live-detail`,
+    ]);
+  });
+
+  it('stays live with null category and viewers when live-detail fails', async () => {
+    const f = routed({ channelName: 'x', channelImageUrl: null, openLive: true }, null);
+    const r = await fetchChannel(ID, f);
+    expect(r).toMatchObject({ status: 'live', category: null, viewers: null });
+  });
+
+  it('does not call live-detail for offline channels', async () => {
+    const f = routed({ channelName: 'x', channelImageUrl: null, openLive: false }, {});
+    await fetchChannel(ID, f);
+    expect(f).toHaveBeenCalledTimes(1);
   });
 
   it('maps openLive false to offline', async () => {

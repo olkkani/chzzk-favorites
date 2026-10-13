@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { loadChannelCache, mergeCache, mergeStatus, pruneRecord, saveChannelCache, startPolling, type Poller } from '../../lib/chzzk-api';
+import { loadChannelCache, mergeCache, mergeLiveMeta, mergeStatus, pruneRecord, saveChannelCache, startPolling, type Poller } from '../../lib/chzzk-api';
 import { parseChannelId, watchRail } from '../../lib/dom-anchor';
-import { buildRows, filterLive, type CachedChannel, type FavoritesState, type FavoritesStore, type LiveStatus, type RowData } from '../../lib/favorites';
+import { buildRows, filterLive, type CachedChannel, type FavoritesState, type FavoritesStore, type LiveMeta, type LiveStatus, type RowData } from '../../lib/favorites';
 
 export function useFavorites(store: FavoritesStore): FavoritesState {
   return useSyncExternalStore(store.subscribe, store.getState);
@@ -24,8 +24,10 @@ export function useRows(store: FavoritesStore): RowData[] {
   const state = useFavorites(store);
   const [cache, setCache] = useState<Record<string, CachedChannel>>({});
   const [status, setStatus] = useState<Record<string, LiveStatus>>({});
+  const [meta, setMeta] = useState<Record<string, LiveMeta>>({});
   const cacheRef = useRef(cache);
   const statusRef = useRef(status);
+  const metaRef = useRef(meta);
   const pollerRef = useRef<Poller | null>(null);
   const idsKey = state.data.items.map((i) => i.channelId).join(',');
 
@@ -42,8 +44,10 @@ export function useRows(store: FavoritesStore): RowData[] {
         const ids = store.getState().data.items.map((i) => i.channelId);
         cacheRef.current = pruneRecord(mergeCache(cacheRef.current, results), ids);
         statusRef.current = pruneRecord(mergeStatus(statusRef.current, results), ids);
+        metaRef.current = pruneRecord(mergeLiveMeta(metaRef.current, results), ids);
         setCache(cacheRef.current);
         setStatus(statusRef.current);
+        setMeta(metaRef.current);
         void saveChannelCache(cacheRef.current);
       },
     });
@@ -59,5 +63,5 @@ export function useRows(store: FavoritesStore): RowData[] {
     pollerRef.current?.refresh();
   }, [idsKey]);
 
-  return useMemo(() => filterLive(buildRows(state.data.items, cache, status)), [state.data.items, cache, status]);
+  return useMemo(() => filterLive(buildRows(state.data.items, cache, status, meta)), [state.data.items, cache, status, meta]);
 }

@@ -65,22 +65,57 @@ export interface RowData {
   name: string | null;
   imageUrl: string | null;
   status: LiveStatus | null;
+  category: string | null;
+  viewers: number | null;
+}
+export interface LiveMeta {
+  category: string | null;
+  viewers: number | null;
 }
 
 export function buildRows(
   items: FavoriteItem[],
   cache: Record<string, CachedChannel>,
   status: Record<string, LiveStatus>,
+  meta: Record<string, LiveMeta> = {},
 ): RowData[] {
   return items.map((i) => ({
     channelId: i.channelId,
     name: cache[i.channelId]?.name ?? null,
     imageUrl: cache[i.channelId]?.imageUrl ?? null,
     status: status[i.channelId] ?? null,
+    category: meta[i.channelId]?.category ?? null,
+    viewers: meta[i.channelId]?.viewers ?? null,
   }));
 }
 
+export function formatViewers(n: number): string {
+  if (n < 10000) return n.toLocaleString('en-US');
+  return `${Math.floor(n / 1000) / 10}만`;
+}
+
 export const filterLive = (rows: RowData[]): RowData[] => rows.filter((r) => r.status !== 'offline');
+
+export interface CategoryGroup {
+  category: string | null;
+  rows: RowData[];
+  total: number;
+}
+
+export function groupByCategory(rows: RowData[]): CategoryGroup[] {
+  const byCategory = new Map<string | null, RowData[]>();
+  for (const r of rows) {
+    const list = byCategory.get(r.category);
+    if (list) list.push(r);
+    else byCategory.set(r.category, [r]);
+  }
+  const groups = [...byCategory].map(([category, list]) => ({
+    category,
+    rows: [...list].sort((a, b) => (b.viewers ?? -1) - (a.viewers ?? -1)),
+    total: list.reduce((sum, r) => sum + (r.viewers ?? 0), 0),
+  }));
+  return groups.sort((a, b) => (a.category === null ? 1 : 0) - (b.category === null ? 1 : 0) || b.total - a.total);
+}
 
 export type SaveStatus = 'ok' | 'error';
 export interface FavoritesState {

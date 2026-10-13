@@ -1,14 +1,33 @@
 import { storage } from '#imports';
-import type { CachedChannel, LiveStatus } from './favorites';
+import type { CachedChannel, LiveMeta, LiveStatus } from './favorites';
 
 export interface ChannelInfo {
   channelId: string;
   name: string | null;
   imageUrl: string | null;
   status: LiveStatus;
+  category?: string | null;
+  viewers?: number | null;
 }
 
 const BASE = 'https://api.chzzk.naver.com/service/v1/channels/';
+const detailUrl = (channelId: string) => `https://api.chzzk.naver.com/service/v3/channels/${channelId}/live-detail`;
+
+async function fetchLiveMeta(channelId: string, fetchFn: typeof fetch): Promise<{ category: string | null; viewers: number | null }> {
+  const none = { category: null, viewers: null };
+  try {
+    const res = await fetchFn(detailUrl(channelId));
+    if (!res.ok) return none;
+    const c = ((await res.json()) as { content?: Record<string, unknown> | null })?.content;
+    if (typeof c !== 'object' || c === null) return none;
+    return {
+      category: typeof c.liveCategoryValue === 'string' && c.liveCategoryValue !== '' ? c.liveCategoryValue : null,
+      viewers: typeof c.concurrentUserCount === 'number' ? c.concurrentUserCount : null,
+    };
+  } catch {
+    return none;
+  }
+}
 
 const httpsOnly = (v: unknown): string | null => (typeof v === 'string' && v.startsWith('https://') ? v : null);
 
@@ -23,7 +42,8 @@ export async function fetchChannel(channelId: string, fetchFn: typeof fetch = fe
     const name = typeof c.channelName === 'string' ? c.channelName : null;
     const imageUrl = httpsOnly(c.channelImageUrl);
     if (typeof c.openLive !== 'boolean') return { channelId, name, imageUrl, status: 'unknown' };
-    return { channelId, name, imageUrl, status: c.openLive ? 'live' : 'offline' };
+    if (!c.openLive) return { channelId, name, imageUrl, status: 'offline' };
+    return { channelId, name, imageUrl, status: 'live', ...(await fetchLiveMeta(channelId, fetchFn)) };
   } catch {
     return unknown;
   }
@@ -58,6 +78,12 @@ export function mergeCache(prev: Record<string, CachedChannel>, results: Channel
 export function mergeStatus(prev: Record<string, LiveStatus>, results: ChannelInfo[]): Record<string, LiveStatus> {
   const next = { ...prev };
   for (const r of results) next[r.channelId] = r.status;
+  return next;
+}
+
+export function mergeLiveMeta(prev: Record<string, LiveMeta>, results: ChannelInfo[]): Record<string, LiveMeta> {
+  const next = { ...prev };
+  for (const r of results) next[r.channelId] = { category: r.category ?? null, viewers: r.viewers ?? null };
   return next;
 }
 
